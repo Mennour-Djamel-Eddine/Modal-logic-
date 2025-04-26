@@ -8,7 +8,7 @@ class KripkeModel:
     Supports worlds (W), accessibility relations (R), and valuations (V).
     Includes serialization, validation, and advanced query methods.
     """
-
+ 
     def __init__(self):
         """Initialize an empty Kripke model."""
         self.W: Set[str] = set()               # Worlds (e.g., {"w1", "w2"})
