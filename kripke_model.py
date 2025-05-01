@@ -1,577 +1,399 @@
-import streamlit as st
-from kripke_model import KripkeModel, evaluate_formula_in_all_worlds, parse_simple_formula
-from typing import Dict, List, Tuple
+from typing import Set, Dict, Tuple, Optional, Any
 import json
-import pandas as pd
-import os
-import streamlit.components.v1 as components
 
-def add_local_logo():
-    try:
-        # Path to your logo file (in same directory as script)
-        logo_path = os.path.join(os.path.dirname(__file__), "Logo.png")
-        
-        # Display the logo at the top of sidebar with updated parameter
-        st.sidebar.image(
-            logo_path,
-            width=150,  # Adjust width as needed
-            use_container_width=False,  # Updated parameter
-            output_format="auto"  # Optional: for better format handling
+# Import the KripkeModel class from the first document
+class KripkeModel:
+    """
+    A complete Kripke model for modal logic evaluation.
+    Supports worlds (W), accessibility relations (R), and valuations (V).
+    Includes serialization, validation, and advanced query methods.
+    """
+
+    def __init__(self):
+        """Initialize an empty Kripke model."""
+        self.W: Set[str] = set()               # Worlds (e.g., {"w1", "w2"})
+        self.R: Set[Tuple[str, str]] = set()   # Relations (e.g., {("w1", "w2")})
+        self.V: Dict[str, Dict[str, bool]] = {} # Valuations (e.g., {"w1": {"p": True}})
+        self._default_valuation = False        # Default truth value for undefined props
+
+    # === World Management ===
+    def add_world(self, world: str) -> None:
+        """Add a world to the model."""
+        if not isinstance(world, str):
+            raise TypeError("World must be a string.")
+        self.W.add(world)
+        if world not in self.V:
+            self.V[world] = {}
+
+    def remove_world(self, world: str) -> None:
+        """Remove a world and all its relations/valuations."""
+        if world not in self.W:
+            raise ValueError(f"World '{world}' does not exist.")
+        self.W.remove(world)
+        self.R = {(w1, w2) for (w1, w2) in self.R if w1 != world and w2 != world}
+        del self.V[world]
+
+    # === Relation Management ===
+    def add_relation(self, source: str, target: str) -> None:
+        """Add an accessibility relation from `source` to `target`."""
+        if source not in self.W or target not in self.W:
+            raise ValueError("Both worlds must exist.")
+        self.R.add((source, target))
+
+    def remove_relation(self, source: str, target: str) -> None:
+        """Remove a specific accessibility relation."""
+        if (source, target) not in self.R:
+            raise ValueError(f"Relation ({source}, {target}) does not exist.")
+        self.R.remove((source, target))
+
+    def make_relation_reflexive(self) -> None:
+        """Ensure every world accesses itself (for T/S4/S5 logics)."""
+        for w in self.W:
+            self.R.add((w, w))
+
+    def make_relation_symmetric(self) -> None:
+        """Ensure all relations are bidirectional (for B/S5 logics)."""
+        for (w1, w2) in list(self.R):
+            self.R.add((w2, w1))
+
+    def make_relation_transitive(self) -> None:
+        """Ensure relations are transitive (for S4/S5 logics)."""
+        changed = True
+        while changed:
+            changed = False
+            for (w1, w2) in list(self.R):
+                for (w3, w4) in list(self.R):
+                    if w2 == w3 and (w1, w4) not in self.R:
+                        self.R.add((w1, w4))
+                        changed = True
+
+    # === Valuation Management ===
+    def set_valuation(self, world: str, prop: str, value: bool) -> None:
+        """Set the truth value of `prop` in `world`."""
+        if world not in self.W:
+            raise ValueError(f"World '{world}' does not exist.")
+        if not isinstance(prop, str):
+            raise TypeError("Proposition must be a string.")
+        self.V[world][prop] = value
+
+    def get_valuation(self, world: str, prop: str) -> bool:
+        """Get the truth value of `prop` in `world` (default: False)."""
+        return self.V.get(world, {}).get(prop, self._default_valuation)
+
+    def set_default_valuation(self, default: bool) -> None:
+        """Set default truth value for undefined propositions."""
+        self._default_valuation = default
+
+    # === Model Queries ===
+    def get_accessible_worlds(self, world: str) -> Set[str]:
+        """Get all worlds accessible from `world`."""
+        return {w2 for (w1, w2) in self.R if w1 == world}
+
+    def is_world_reachable(self, start: str, target: str, max_steps: int = 100) -> bool:
+        """Check if `target` is reachable from `start` in ≤ `max_steps`."""
+        visited = set()
+        stack = [(start, 0)]
+        while stack:
+            current, steps = stack.pop()
+            if current == target:
+                return True
+            if steps >= max_steps:
+                continue
+            for (w1, w2) in self.R:
+                if w1 == current and w2 not in visited:
+                    visited.add(w2)
+                    stack.append((w2, steps + 1))
+        return False
+
+    def validate_model(self) -> bool:
+        """Check if the model is consistent (no dangling relations)."""
+        for (w1, w2) in self.R:
+            if w1 not in self.W or w2 not in self.W:
+                return False
+        for world in self.V:
+            if world not in self.W:
+                return False
+        return True
+
+    # === Serialization ===
+    def to_dict(self) -> Dict[str, Any]:
+        """Export the model to a dictionary (for JSON)."""
+        return {
+            "W": list(self.W),
+            "R": [list(pair) for pair in self.R],
+            "V": {w: props for w, props in self.V.items()},
+            "default_valuation": self._default_valuation
+        }
+
+    def save_to_json(self, filepath: str) -> None:
+        """Save the model to a JSON file."""
+        with open(filepath, 'w') as f:
+            json.dump(self.to_dict(), f, indent=2)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'KripkeModel':
+        """Load a model from a dictionary."""
+        model = cls()
+        model.W = set(data["W"])
+        model.R = {tuple(pair) for pair in data["R"]}
+        model.V = data["V"]
+        model._default_valuation = data.get("default_valuation", False)
+        return model
+
+    @classmethod
+    def load_from_json(cls, filepath: str) -> 'KripkeModel':
+        """Load a model from a JSON file."""
+        with open(filepath, 'r') as f:
+            data = json.load(f)
+        return cls.from_dict(data)
+
+    # === Debugging ===
+    def __str__(self) -> str:
+        """Pretty-print the model."""
+        worlds = sorted(self.W)
+        relations = sorted(self.R)
+        valuations = []
+        for world in sorted(self.V.keys()):
+            props = [f"{p}:{'T' if v else 'F'}" for p, v in self.V[world].items()]
+            valuations.append(f"{world}: {{{', '.join(props)}}}")
+        return (
+            f"Kripke Model:\n"
+            f"Worlds: {{{', '.join(worlds)}}}\n"
+            f"Relations: {{{', '.join(f'({w1}→{w2})' for (w1, w2) in relations)}}}\n"
+            f"Valuations:\n  " + "\n  ".join(valuations)
         )
 
-    except Exception as e:
-        # Elegant fallback with emoji logo
-        st.sidebar.markdown("""
-        <style>
-            .fallback-logo {
-                text-align: center;
-                margin-bottom: 20px;
-                font-size: 2.5em;
-            }
-            .fallback-text {
-                text-align: center;
-                color: #ffffff;
-            }
-        </style>
-        <div class='fallback-logo'></div>
-        <div class='fallback-text'>
-            <h3>Modal Logic</h3>
-        </div>
-        """, unsafe_allow_html=True)
+# Import the Formula classes from the second document
+class Formula:
+    pass  # Base class
 
+class Prop(Formula):
+    def __init__(self, name):
+        self.name = name
+    def __repr__(self):
+        return self.name
 
-# Initialize session state
-if 'kripke_model' not in st.session_state:
-    st.session_state.kripke_model = KripkeModel()
-if 'formulas' not in st.session_state:
-    st.session_state.formulas = []
+class Not(Formula):
+    def __init__(self, operand):
+        if not isinstance(operand, Formula): raise TypeError("Operand must be a Formula")
+        self.operand = operand
+    def __repr__(self):
+        return f"¬{self.operand}"
 
-# Initialisation des états
-if 'est_connecte' not in st.session_state:
-    st.session_state.est_connecte = False
-    st.session_state.nom_utilisateur = ""
-if "formule" not in st.session_state:
-    st.session_state.formule = ""
+class And(Formula):
+    def __init__(self, left, right):
+        if not isinstance(left, Formula): raise TypeError("Left operand must be a Formula")
+        if not isinstance(right, Formula): raise TypeError("Right operand must be a Formula")
+        self.left = left
+        self.right = right
+    def __repr__(self):
+        return f"({self.left} ∧ {self.right})"
 
-# Fonction pour ajouter un symbole à la formule
-def ajouter_connecteur(symbole):
-    st.session_state.formule += symbole
-    st.rerun()
+class Or(Formula):
+    def __init__(self, left, right):
+        if not isinstance(left, Formula): raise TypeError("Left operand must be a Formula")
+        if not isinstance(right, Formula): raise TypeError("Right operand must be a Formula")
+        self.left = left
+        self.right = right
+    def __repr__(self):
+        return f"({self.left} ∨ {self.right})"
 
-# -------- PAGE DE CONNEXION --------
+class Implies(Formula):
+    def __init__(self, left, right):
+        if not isinstance(left, Formula): raise TypeError("Left operand must be a Formula")
+        if not isinstance(right, Formula): raise TypeError("Right operand must be a Formula")
+        self.left = left
+        self.right = right
+    def __repr__(self):
+        return f"({self.left} → {self.right})"
 
-import streamlit as st
-def page_connexion():
-    # Set the dark theme with custom background color
-    st.markdown("""
-    <style>
-    .stApp {
-        background-color: #1e1b2c;
-        color: white;
-    }
-    .stTextInput > div > div > input {
-        background-color: #2d2b40;
-        color: white;
-    }
-    .stTextInput > label {
-        color: white !important;
-    }
-    .stMarkdown {
-        color: white;
-    }
-    h1, h2, h3, h4, h5, h6, p {
-        color: white !important;
-    }
-    /* Improved logo positioning - moved to top left and up slightly */
-    .logo-container {
-        position: absolute;
-        left: 15px;
-        top: 10px;
-        z-index: 1000;
-    }
-    /* Added padding to main content to accommodate logo */
-    .main-content {
-        padding-top: 40px;  /* Reduced to move title up */
-    }
-    /* Center login button */
-    .login-button-container {
-        display: flex;
-        justify-content: center;
-        margin-top: 20px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+class Box(Formula):  # Necessarily (□)
+    def __init__(self, operand):
+        if not isinstance(operand, Formula): raise TypeError("Operand must be a Formula")
+        self.operand = operand
+    def __repr__(self):
+        return f"□{self.operand}"
+
+class Diamond(Formula):  # Possibly (◇)
+    def __init__(self, operand):
+        if not isinstance(operand, Formula): raise TypeError("Operand must be a Formula")
+        self.operand = operand
+    def __repr__(self):
+        return f"◇{self.operand}"
+
+def parse_simple_formula(formula_str):
+    """Tente de parser une formule simple (non recommandé pour des cas complexes)."""
+    formula_str = formula_str.strip()
+
+    # Basic case: Proposition
+    if ' ' not in formula_str and not any(op in formula_str for op in ['¬', '□', '◇', '∧', '∨', '→', '(', ')']):
+        return Prop(formula_str)
+
+    # Unary prefix operators
+    if formula_str.startswith('¬'):
+        return Not(parse_simple_formula(formula_str[1:]))
+    if formula_str.startswith('□'):
+        return Box(parse_simple_formula(formula_str[1:]))
+    if formula_str.startswith('◇'):
+        return Diamond(parse_simple_formula(formula_str[1:]))
+
+    # Simple handling of external parentheses
+    if formula_str.startswith('(') and formula_str.endswith(')'):
+        return parse_simple_formula(formula_str[1:-1])
+
+    # Search for binary operators
+    if '→' in formula_str:
+        split_pos = formula_str.rfind('→')
+        left = parse_simple_formula(formula_str[:split_pos].strip())
+        right = parse_simple_formula(formula_str[split_pos+1:].strip())
+        return Implies(left, right)
+
+    if '∨' in formula_str:
+        split_pos = formula_str.rfind('∨')
+        left = parse_simple_formula(formula_str[:split_pos].strip())
+        right = parse_simple_formula(formula_str[split_pos+1:].strip())
+        return Or(left, right)
+
+    if '∧' in formula_str:
+        split_pos = formula_str.rfind('∧')
+        left = parse_simple_formula(formula_str[:split_pos].strip())
+        right = parse_simple_formula(formula_str[split_pos+1:].strip())
+        return And(left, right)
+
+    raise ValueError(f"Cannot parse formula: '{formula_str}'")
+
+# New function to evaluate modal formulas in a Kripke model
+def evaluate_formula(model: KripkeModel, formula: Formula, world: str) -> bool:
+    """
+    Evaluate a modal formula in a specified world of a Kripke model.
+    Returns True if the formula is satisfied in the world, False otherwise.
+    """
+    if not model.validate_model():
+        raise ValueError("Invalid Kripke model")
     
-    # Display logo at top left with improved positioning
-    st.markdown('<div class="logo-container">', unsafe_allow_html=True)
-    st.image("Logo.png", width=120)
-    st.markdown('</div>', unsafe_allow_html=True)
+    if world not in model.W:
+        raise ValueError(f"World '{world}' does not exist in the model")
     
-    # Main content with padding to avoid logo overlap
-    st.markdown('<div class="main-content">', unsafe_allow_html=True)
+    # Base case: Proposition
+    if isinstance(formula, Prop):
+        return model.get_valuation(world, formula.name)
     
-    # Updated title styling to match Canva-style caption (3 lines, clear hierarchy)
-    st.markdown("""
-    <style>
-    .title-container {
-        text-align: center;
-        margin-top: 0px;  /* Reduced to move title up */
-        margin-bottom: 40px;
-    }
-    .main-title {
-        font-size: 48px;
-        font-weight: 300;
-        font-family: "Segoe UI", sans-serif;
-        color: white;
-        line-height: 1.2;
-        margin-bottom: 10px;
-    }
-    .highlight {
-        font-weight: 600;
-    }
-    .subtitle {
-        font-size: 20px;
-        font-weight: 300;
-        font-family: "Segoe UI", sans-serif;
-        color: rgba(255, 255, 255, 0.85);
-        line-height: 1.5;
-    }
-    </style>
+    # Negation
+    elif isinstance(formula, Not):
+        return not evaluate_formula(model, formula.operand, world)
     
-    <div class="title-container">
-        <div class="main-title">
-            Maîtrisez la logique modale<br>
-            avec <span class="highlight">logicLens</span>
-        </div>
-        <div class="subtitle">
-            simulez, prouvez, visualisez en un clic
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Conjunction
+    elif isinstance(formula, And):
+        return (evaluate_formula(model, formula.left, world) and 
+                evaluate_formula(model, formula.right, world))
     
-    # Login input with better spacing
-    nom = st.text_input(label="", placeholder="Entrez votre nom d'utilisateur")
+    # Disjunction
+    elif isinstance(formula, Or):
+        return (evaluate_formula(model, formula.left, world) or 
+                evaluate_formula(model, formula.right, world))
     
-    # Custom CSS for gradient button
-    st.markdown("""
-    <style>
-    .stButton button {
-        background: linear-gradient(90deg, #7357ff, #fcacff) !important;
-        color: white !important;
-        font-weight: bold !important;
-        border: none !important;
-        padding: 8px 16px !important;
-        border-radius: 4px !important;
-    }
-    .stButton button:hover {
-        background: linear-gradient(90deg,  #7357ff, #fcacff) !important;
-        color: white !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    # Implication
+    elif isinstance(formula, Implies):
+        return (not evaluate_formula(model, formula.left, world) or 
+                evaluate_formula(model, formula.right, world))
     
-    st.markdown('<div class="login-button-container">', unsafe_allow_html=True)
-    col1, col2, col3,col4,col5 = st.columns([1, 1, 1,1,1])
-
-# Affichage du bouton dans la colonne du milieu
-    with col3:
-        if st.button("Se connecter"):
-            if nom.strip() != "":
-                st.session_state.est_connecte = True
-                st.session_state.nom_utilisateur = nom
-                st.rerun()
-            else:
-                st.error("Veuillez entrer un nom valide")
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-def main():
-    st.set_page_config(
-        page_title="Logique Modale",
-        page_icon=":brain:",
-        layout="wide"
-    )
-
-    # Set the dark theme with custom background color
-    st.markdown("""
-    <style>
-        .stApp {
-            background-color: #1e1b2c;
-            color: white;
-        }
-        .stTextInput > div > div > input {
-            background-color: #2d2b40;
-            color: white;
-        }
-        .stSelectbox > div > div > div {
-            background-color: #2d2b40;
-            color: white;
-        }
-        .stTextInput > label, .stSelectbox > label, .stCheckbox > label {
-            color: white !important;
-        }
-        .stMarkdown {
-            color: white;
-        }
-        div[data-testid="stSubheader"] {
-            color: white;
-        }
-        div[data-testid="stHeader"] {
-            color: white;
-        }
-        .stDataFrame {
-            background-color: #2d2b40;
-        }
-        .stRadio > label {
-            color: white !important;
-        }
-        .stRadio > div {
-            color: white !important;
-        }
-        .stDataFrame [data-testid="stTable"] {
-            color: white;
-        }
-        div.stButton > button {
-            background: linear-gradient(90deg,  #7357ff, #fcacff);
-            color: white;
-            font-weight: bold;
-            border: none;
-        }
-        div.stButton > button:hover {
-            background: linear-gradient(90deg,  #7357ff, #fcacff);
-        }
-        
-        h1, h2, h3, h4, h5, h6, p {
-            color: white !important;
-        }
-        .st-emotion-cache-183lzff {
-            color: white;
-        }
-        .stSidebar {
-            background-color: #2d2b40;
-        }
-        [data-testid="stSidebar"] {
-            background-color: #2d2b40;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown(f"<h2 style='text-align: center; color: white;'>Bienvenue {st.session_state.nom_utilisateur} </h2>", unsafe_allow_html=True)
-
-    # Add custom CSS for styling with the gradient buttons
-    st.markdown("""
-    <style>
-        .stButton button {
-            width: 100%;
-            background: linear-gradient(90deg,  #7357ff, #fcacff) !important;
-            color: white !important;
-            font-weight: bold !important;
-            border: none !important;
-        }
-        .stButton button:hover {
-            background: linear-gradient(90deg,  #7357ff, #fcacff) !important;
-        }
-        
-        .stTextInput input {
-            width: 100%;
-            background-color: #2d2b40;
-            color: white;
-        }
-        .stSelectbox select {
-            width: 100%;
-            background-color: #2d2b40;
-            color: white;
-        }
-        .formula-display {
-            font-family: monospace;
-            font-size: 1.2em;
-            padding: 10px;
-            background-color: #2d2b40;
-            border-radius: 5px;
-            margin: 5px 0;
-            color: white;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # Sidebar with model management
-    with st.sidebar:
-        add_local_logo()
-        st.header("Model Management")
-        
-        model_action = st.radio("Choose action:", 
-                            ["Create New Model", "Load Model", "Save Model"])
-        
-        if model_action == "Create New Model":
-            if st.button("Initialize New Model"):
-                st.session_state.kripke_model = KripkeModel()
-                st.session_state.formulas = []
-                st.success("New model created!")
-        
-        elif model_action == "Load Model":
-            uploaded_file = st.file_uploader("Upload JSON model", type="json")
-            if uploaded_file is not None:
-                try:
-                    data = json.load(uploaded_file)
-                    st.session_state.kripke_model = KripkeModel.from_dict(data)
-                    st.success("Model loaded successfully!")
-                except Exception as e:
-                    st.error(f"Error loading model: {e}")
-        
-        elif model_action == "Save Model":
-            if st.button("Download Current Model"):
-                model_json = json.dumps(st.session_state.kripke_model.to_dict(), indent=2)
-                st.download_button(
-                    label="Download Model as JSON",
-                    data=model_json,
-                    file_name="kripke_model.json",
-                    mime="application/json"
-                )
-
-    # Main content area
+    # Box (Necessity) operator: true if formula is true in all accessible worlds
+    elif isinstance(formula, Box):
+        accessible_worlds = model.get_accessible_worlds(world)
+        return all(evaluate_formula(model, formula.operand, w) for w in accessible_worlds)
     
+    # Diamond (Possibility) operator: true if formula is true in at least one accessible world
+    elif isinstance(formula, Diamond):
+        accessible_worlds = model.get_accessible_worlds(world)
+        return any(evaluate_formula(model, formula.operand, w) for w in accessible_worlds)
     
-    st.header("Build Your Kripke Model")
-            
-    # World management
-    st.subheader("Worlds")
-    col1, col2 = st.columns(2)
-    with col1:
-        new_world = st.text_input("Add new world:")
-        if st.button("Add World") and new_world:
-            try:
-                st.session_state.kripke_model.add_world(new_world)
-                st.success(f"World '{new_world}' added!")
-            except Exception as e:
-                st.error(str(e))
-            
-    with col2:
-        if st.session_state.kripke_model.W:
-            world_to_remove = st.selectbox("Remove world:", sorted(st.session_state.kripke_model.W))
-            if st.button("Remove World"):
-                try:
-                    st.session_state.kripke_model.remove_world(world_to_remove)
-                    st.success(f"World '{world_to_remove}' removed!")
-                except Exception as e:
-                    st.error(str(e))
-            
-    # Relation management
-    st.subheader("Accessibility Relations")
-    if len(st.session_state.kripke_model.W) >= 2:
-        col1, col2 = st.columns(2)
-        with col1:
-            source_world = st.selectbox("From world:", sorted(st.session_state.kripke_model.W))
-        with col2:
-            target_world = st.selectbox("To world:", sorted(st.session_state.kripke_model.W))
-            
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Add Relation"):
-                try:
-                    st.session_state.kripke_model.add_relation(source_world, target_world)
-                    st.success(f"Relation {source_world}→{target_world} added!")
-                except Exception as e:
-                    st.error(str(e))
-        with col2:
-            if st.button("Remove Relation"):
-                try:
-                    st.session_state.kripke_model.remove_relation(source_world, target_world)
-                    st.success(f"Relation {source_world}→{target_world} removed!")
-                except Exception as e:
-                    st.error(str(e))
-            
-        # Relation properties
-        st.subheader("Relation Properties")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if st.button("Make Reflexive"):
-                st.session_state.kripke_model.make_relation_reflexive()
-                st.success("All worlds now access themselves")
-        with col2:
-            if st.button("Make Symmetric"):
-                st.session_state.kripke_model.make_relation_symmetric()
-                st.success("All relations now bidirectional")
-        with col3:
-            if st.button("Make Transitive"):
-                st.session_state.kripke_model.make_relation_transitive()
-                st.success("Relations now transitive")
-            
-    # Valuation management
-    st.subheader("Valuations")
-    if st.session_state.kripke_model.W:
-        selected_world = st.selectbox("Select world for valuation:", sorted(st.session_state.kripke_model.W))
-        prop_name = st.text_input("Proposition name (e.g., 'p', 'q'):")
-        prop_value = st.checkbox("Truth value", value=True)
-            
-        if st.button("Set Valuation"):
-            try:
-                st.session_state.kripke_model.set_valuation(selected_world, prop_name, prop_value)
-                st.success(f"Set {prop_name}={prop_value} in {selected_world}")
-            except Exception as e:
-                st.error(str(e))
-                
-            # Show current valuations
-            st.markdown("**Current Valuations:**")
-            valuations = []
-            for world in sorted(st.session_state.kripke_model.W):
-                for prop, value in st.session_state.kripke_model.V.get(world, {}).items():
-                    valuations.append({
-                        "World": world,
-                        "Proposition": prop,
-                        "Value": "True" if value else "False"
-                    })
-            if valuations:
-                st.dataframe(pd.DataFrame(valuations))
-            else:
-                st.info("No valuations set yet")
-
-    # Evaluation section
-    st.subheader("Evaluate Modal Formulas")
-        
-    # Initialize formula_input in session state if it doesn't exist
-    if 'formula_input' not in st.session_state:
-        st.session_state.formula_input = ""
-
-# Create buttons for logical connectors
-    st.markdown("**Insert connectors:**")
-    cols = st.columns(7)
-    with cols[0]:
-            not_btn = st.button("¬ (NOT)")
-    with cols[1]:
-        and_btn = st.button("∧ (AND)")
-    with cols[2]:
-        or_btn = st.button("∨ (OR)")
-    with cols[3]:
-        implies_btn = st.button("→ (IMPLIES)")
-    with cols[4]:
-        box_btn = st.button("□ (BOX)")
-    with cols[5]:
-        diamond_btn = st.button("◇ (DIAMOND)")
-    with cols[6]:
-        parens_btn = st.button("( )")
-
-    st.markdown("**Insert propositions:**")
-    prop_cols = st.columns(2)
-    with prop_cols[0]:
-        p_btn = st.button("p")
-    with prop_cols[1]:
-        q_btn = st.button("q")
-
-# Handle button presses
-    if not_btn:
-        st.session_state.formula_input += "¬"
-    if and_btn:
-        st.session_state.formula_input += " ∧ "
-    if or_btn:
-        st.session_state.formula_input += " ∨ "
-    if implies_btn:
-        st.session_state.formula_input += " → "
-    if box_btn:
-        st.session_state.formula_input += "□"
-    if diamond_btn:
-        st.session_state.formula_input += "◇"
-    if parens_btn:
-        st.session_state.formula_input += "()"
-    if p_btn:
-        st.session_state.formula_input += "p"
-    if q_btn:
-        st.session_state.formula_input += "q"
-
-# Formula input that syncs with both keyboard and button inputs
-    formula_input = st.text_input(
-        "Enter a modal logic formula:",
-        value=st.session_state.formula_input,
-        help="Use p, q for propositions; ¬ for NOT; ∧ for AND; ∨ for OR; → for IMPLIES; □ for BOX; ◇ for DIAMOND",
-        key="formula_input_field",
-        on_change=lambda: setattr(st.session_state, 'formula_input', st.session_state.formula_input_field)
-)
-
-# This ensures the session state stays in sync when typing
-    if formula_input != st.session_state.formula_input:
-        st.session_state.formula_input = formula_input
-        
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Evaluate Formula"):
-            if formula_input:
-                try:
-                    formula = parse_simple_formula(formula_input)
-                    results = evaluate_formula_in_all_worlds(st.session_state.kripke_model, formula)
-                    
-                    # Display results
-                    st.markdown("**Evaluation Results:**")
-                    result_data = []
-                    for world, value in results.items():
-                        result_data.append({
-                            "World": world,
-                            "Result": "True" if value else "False"
-                        })
-                    st.dataframe(pd.DataFrame(result_data))
-                    
-                    # Add to saved formulas
-                    if formula_input not in [f[1] for f in st.session_state.formulas]:
-                        st.session_state.formulas.append((formula, formula_input))
-                except Exception as e:
-                    st.error(f"Error evaluating formula: {e}")
-            else:
-                st.warning("Please enter a formula first")
-            
-
-    # Model visualization
-    st.subheader("Model Visualization")
-            
-    if not st.session_state.kripke_model.W:
-        st.info("Model has no worlds yet. Add some in the Model Builder tab.")
     else:
-        # Display model structure
-        st.subheader("Current Model Structure")
-        st.code(str(st.session_state.kripke_model))
-            
-        # Graph visualization (using graphviz)
-        try:
-            from graphviz import Digraph
-            
-            dot = Digraph()
-            dot.attr(rankdir='LR', bgcolor='#1e1b2c')
-            
-            # Add nodes (worlds)
-            for world in sorted(st.session_state.kripke_model.W):
-                # Get valuations for this world
-                valuations = st.session_state.kripke_model.V.get(world, {})
-                val_str = "\n".join([f"{p}:{'T' if v else 'F'}" for p, v in valuations.items()])
-                
-                dot.node(world, 
-                        label=f"{world}\n{val_str}" if val_str else world,
-                        shape='circle',
-                        style='filled',
-                        fillcolor='#7357ff',
-                        fontcolor='white')
-            
-            # Add edges (relations)
-            for source, target in st.session_state.kripke_model.R:
-                dot.edge(source, target, color='white')
-            
-            st.graphviz_chart(dot)
-            
-        except ImportError:
-            st.warning("For graph visualization, please install graphviz: pip install graphviz")
-            st.write("Here's a text representation of the relations:")
-            relations = sorted(st.session_state.kripke_model.R)
-            st.write(" → ".join([f"{source}→{target}" for source, target in relations]) or "No relations")
+        raise TypeError(f"Unknown formula type: {type(formula)}")
 
-    
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col3:
-        if st.button("Se déconnecter"):
-            st.session_state.est_connecte = False
-            st.session_state.nom_utilisateur = ""
-            st.session_state.formule = ""
-            st.rerun()
-            
+def evaluate_formula_in_all_worlds(model: KripkeModel, formula: Formula) -> Dict[str, bool]:
+    """
+    Evaluate a formula in all worlds of the model.
+    Returns a dictionary mapping world names to truth values.
+    """
+    return {world: evaluate_formula(model, formula, world) for world in model.W}
 
+# Main program
 if __name__ == "__main__":
-    if not st.session_state.est_connecte:
-        page_connexion()
-    else:
-        main()
+    # Create a sample Kripke model
+    model = KripkeModel()
+    
+    # Add worlds
+    model.add_world("w1")
+    model.add_world("w2")
+    model.add_world("w3")
+    
+    # Add relations
+    model.add_relation("w1", "w2")
+    model.add_relation("w2", "w3")
+    model.make_relation_reflexive()  # w1→w1, w2→w2, w3→w3
+    
+    # Set valuations for proposition 'p'
+    model.set_valuation("w1", "p", True)
+    model.set_valuation("w2", "p", False)
+    model.set_valuation("w3", "p", True)
+    
+    # Set valuations for proposition 'q'
+    model.set_valuation("w1", "q", False)
+    model.set_valuation("w2", "q", True)
+    model.set_valuation("w3", "q", True)
+    
+    print("Kripke Model Structure:")
+    print(model)
+    
+    # Create and evaluate modal formulas
+    formulas = [
+        (Prop("p"), "p"),
+        (Not(Prop("p")), "¬p"),
+        (And(Prop("p"), Prop("q")), "p ∧ q"),
+        (Or(Prop("p"), Prop("q")), "p ∨ q"),
+        (Implies(Prop("p"), Prop("q")), "p → q"),
+        (Box(Prop("p")), "□p"),
+        (Diamond(Prop("p")), "◇p"),
+        (Box(Implies(Prop("p"), Prop("q"))), "□(p → q)")
+    ]
+    
+    print("\nEvaluating Formulas:")
+    for formula_obj, formula_str in formulas:
+        results = evaluate_formula_in_all_worlds(model, formula_obj)
+        print(f"\nFormula: {formula_str}")
+        for world, result in results.items():
+            print(f"  {world}: {result}")
+    
+    # Demonstrate formula parsing (optional)
+    print("\nDemonstrating Formula Parsing:")
+    try:
+        parsed_formula = parse_simple_formula("□(p → q)")
+        print(f"Parsed formula: {parsed_formula}")
+        results = evaluate_formula_in_all_worlds(model, parsed_formula)
+        print("Evaluation results:")
+        for world, result in results.items():
+            print(f"  {world}: {result}")
+    except ValueError as e:
+        print(f"Parsing error: {e}")
+    
+    # Interactive mode (optional)
+    print("\nInteractive Mode:")
+    print("Enter a modal formula to evaluate (or 'exit' to quit)")
+    print("Use 'p', 'q' for propositions")
+    print("Use '¬' for negation, '∧' for AND, '∨' for OR, '→' for IMPLIES")
+    print("Use '□' for BOX (necessity), '◇' for DIAMOND (possibility)")
+    
+    while True:
+        user_input = input("\nEnter formula: ")
+        if user_input.lower() == 'exit':
+            break
+        
+        try:
+            parsed = parse_simple_formula(user_input)
+            print(f"Parsed as: {parsed}")
+            results = evaluate_formula_in_all_worlds(model, parsed)
+            print("Results:")
+            for world, result in results.items():
+                print(f"  {world}: {result}")
+        except Exception as e:
+            print(f"Error: {e}")
