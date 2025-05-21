@@ -62,6 +62,11 @@ def ajouter_connecteur(symbole):
 
 import streamlit as st
 def page_connexion():
+    st.set_page_config(
+        page_title="Logique Modale",
+        page_icon=":brain:",
+        layout="wide"
+    )
     # Set the dark theme with custom background color
     st.markdown("""
     <style>
@@ -140,17 +145,17 @@ def page_connexion():
     
     <div class="title-container">
         <div class="main-title">
-            Maîtrisez la logique modale<br>
-            avec <span class="highlight">logicLens</span>
+            Master modal logic<br>
+            with <span class="highlight">logicLens</span>
         </div>
         <div class="subtitle">
-            simulez, prouvez, visualisez en un clic
+            simulate, prove, visualize in one click
         </div>
     </div>
     """, unsafe_allow_html=True)
     
     # Login input with better spacing
-    nom = st.text_input(label="", placeholder="Entrez votre nom d'utilisateur")
+    nom = st.text_input(label="", placeholder="Enter your Username")
     
     # Custom CSS for gradient button
     st.markdown("""
@@ -175,13 +180,13 @@ def page_connexion():
 
 # Affichage du bouton dans la colonne du milieu
     with col3:
-        if st.button("Se connecter"):
+        if st.button("log in"):
             if nom.strip() != "":
                 st.session_state.est_connecte = True
                 st.session_state.nom_utilisateur = nom
                 st.rerun()
             else:
-                st.error("Veuillez entrer un nom valide")
+                st.error("Please enter a valide name")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -563,7 +568,7 @@ def main():
     
     col1, col2, col3 = st.columns([1, 1, 1])
     with col3:
-        if st.button("Se déconnecter"):
+        if st.button("Disconnect"):
             st.session_state.est_connecte = False
             st.session_state.nom_utilisateur = ""
             st.session_state.formule = ""
