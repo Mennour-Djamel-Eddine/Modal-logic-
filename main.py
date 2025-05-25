@@ -262,7 +262,7 @@ def main():
     </style>
     """, unsafe_allow_html=True)
 
-    st.markdown(f"<h2 style='text-align: center; color: white;'>Bienvenue {st.session_state.nom_utilisateur} </h2>", unsafe_allow_html=True)
+    st.markdown(f"<h2 style='text-align: center; color: white;'>Welcome {st.session_state.nom_utilisateur} </h2>", unsafe_allow_html=True)
 
     # Add custom CSS for styling with the gradient buttons
     st.markdown("""
