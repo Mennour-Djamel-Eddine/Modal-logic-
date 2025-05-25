@@ -345,11 +345,14 @@ def main():
     with col1:
         new_world = st.text_input("Add new world:")
         if st.button("Add World") and new_world:
-            try:
-                st.session_state.kripke_model.add_world(new_world)
-                st.success(f"World '{new_world}' added!")
-            except Exception as e:
-                st.error(str(e))
+            if new_world in st.session_state.kripke_model.W:
+                st.warning(f"World '{new_world}' already exists.")
+            else:
+                try:
+                    st.session_state.kripke_model.add_world(new_world)
+                    st.success(f"World '{new_world}' added!")
+                except Exception as e:
+                    st.error(str(e))
             
     with col2:
         if st.session_state.kripke_model.W:
